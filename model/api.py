@@ -9,6 +9,8 @@ app = Flask(__name__)
 MODEL_PATH = '../dataset/model/best_model.h5'
 model = None
 
+ALLOWED_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv'}
+
 
 def load_model():
     global model
@@ -29,7 +31,20 @@ def run_validation(video_file):
     """
     temp_path = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
+        # Validate file extension before any processing
+        ext = os.path.splitext(video_file.filename)[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            return {'success': False,
+                    'error': f'Unsupported file type "{ext}". '
+                             f'Allowed: {", ".join(sorted(ALLOWED_EXTENSIONS))}'}, 400
+
+        # Guard against model not being loaded
+        if model is None:
+            return {'success': False,
+                    'error': 'Model not loaded. Run train.py first.'}, 503
+
+        # Preserve the original extension so ffmpeg identifies the container correctly
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
             video_file.save(tmp.name)
             temp_path = tmp.name
 

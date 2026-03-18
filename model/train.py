@@ -11,8 +11,8 @@ def augment_frames(frames):
     return [
         frames,
         np.flip(frames, axis=2).copy(),
-        np.clip(frames * 1.2, 0.0, 1.0),
-        np.clip(frames * 0.8, 0.0, 1.0),
+        np.clip(frames * 1.2, -1.0, 1.0),  # MobileNetV2 input range is [-1, 1]
+        np.clip(frames * 0.8, -1.0, 1.0),
     ]
 
 
@@ -62,9 +62,12 @@ def load_training_data(data_dir):
     Xv_n, Xa_n, y_n = load_videos_from_dir(
         os.path.join(data_dir, 'train', 'non_educational'), 0, True)
 
-    return (np.array(Xv_e + Xv_n, dtype=np.float32),
-            np.array(Xa_e + Xa_n, dtype=np.float32),
-            np.array(y_e  + y_n,  dtype=np.int32))
+    X_video = np.array(Xv_e + Xv_n, dtype=np.float32)
+    X_audio = np.array(Xa_e + Xa_n, dtype=np.float32)
+    y       = np.array(y_e  + y_n,  dtype=np.int32)
+    # Shuffle so mini-batches contain a mix of both classes
+    indices = np.random.permutation(len(y))
+    return X_video[indices], X_audio[indices], y[indices]
 
 
 def load_validation_data(data_dir):
@@ -76,9 +79,12 @@ def load_validation_data(data_dir):
     Xv_n, Xa_n, y_n = load_videos_from_dir(
         os.path.join(data_dir, 'validation', 'non_educational'), 0, False)
 
-    return (np.array(Xv_e + Xv_n, dtype=np.float32),
-            np.array(Xa_e + Xa_n, dtype=np.float32),
-            np.array(y_e  + y_n,  dtype=np.int32))
+    X_video = np.array(Xv_e + Xv_n, dtype=np.float32)
+    X_audio = np.array(Xa_e + Xa_n, dtype=np.float32)
+    y       = np.array(y_e  + y_n,  dtype=np.int32)
+    # Shuffle so evaluation order doesn't skew reported metrics
+    indices = np.random.permutation(len(y))
+    return X_video[indices], X_audio[indices], y[indices]
 
 
 def train_model():

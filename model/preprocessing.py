@@ -4,6 +4,7 @@ import librosa
 import subprocess
 import tempfile
 import os
+import tensorflow as tf
 
 # Constants — must match across ALL files. If you change any value, delete
 # best_model.h5 and retrain from scratch.
@@ -33,7 +34,12 @@ def extract_frames(video_path, max_frames=MAX_FRAMES, frame_size=FRAME_SIZE):
         ret, frame = cap.read()
         if ret:
             frame = cv2.resize(frame, frame_size)
-            frame = frame / 255.0
+            # Convert BGR (OpenCV default) → RGB (MobileNetV2 expects RGB)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # MobileNetV2 requires input in [-1, 1], not [0, 1]
+            frame = tf.keras.applications.mobilenet_v2.preprocess_input(
+                frame.astype(np.float32)
+            )
             frames.append(frame)
     cap.release()
     if len(frames) == 0:
