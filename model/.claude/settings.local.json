@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(where python:*)",
+      "Bash(where pip:*)",
+      "Read(//c/Users/pc/AppData/Local/Programs/Python//**)",
+      "Bash(ls /c/Python*)",
+      "Bash(cmd:*)",
+      "Bash(/c/Windows/System32/cmd.exe:*)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(/c/Users/pc/AppData/Local/Programs/Python/Python310/python.exe:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe:*)"
+    ]
+  }
+}

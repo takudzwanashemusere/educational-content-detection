@@ -6,14 +6,35 @@ import os
 from preprocessing import extract_frames, extract_audio_features
 
 app = Flask(__name__)
-MODEL_PATH = '../dataset/model/best_model.h5'
+
+# MODEL_PATH: local file path to use (default: best_model.h5 next to api.py)
+# MODEL_URL:  Google Drive shareable link — if set, model is downloaded on startup
+MODEL_PATH = os.environ.get('MODEL_PATH', './best_model.h5')
+MODEL_URL  = os.environ.get('MODEL_URL', '')
 model = None
 
 ALLOWED_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv'}
 
 
+def download_model():
+    """Download model from Google Drive if MODEL_URL is set and file is missing."""
+    if not MODEL_URL:
+        return
+    if os.path.exists(MODEL_PATH):
+        print(f"✓ Model already present at {MODEL_PATH}")
+        return
+    try:
+        import gdown
+        print(f"Downloading model from Google Drive → {MODEL_PATH} ...")
+        gdown.download(MODEL_URL, MODEL_PATH, quiet=False, fuzzy=True)
+        print("✓ Download complete.")
+    except Exception as e:
+        print(f"✗ Model download failed: {e}")
+
+
 def load_model():
     global model
+    download_model()
     try:
         model = tf.keras.models.load_model(MODEL_PATH)
         print("✓ Model loaded successfully!")
@@ -99,7 +120,7 @@ def run_validation(video_file):
 def home():
     return jsonify({
         'status': 'running',
-        'message': 'CUT LearningHub Video Validation API',
+        'message': 'Reelscholar Video Validation API',
         'endpoints': {
             'validate': '/api/validate-video  [POST]',
             'upload':   '/api/upload          [POST]'
@@ -148,14 +169,14 @@ def upload_video():
     }), 200
 
 
+# Load model at startup (works for both gunicorn and direct python run)
+print("=" * 60)
+print("  ReelScholar — Educational Video Validation API")
+print("=" * 60)
+load_model()
+
 if __name__ == '__main__':
-    print("=" * 60)
-    print("  CUT LearningHub — Educational Video Validation API")
-    print("=" * 60)
-    if load_model():
-        print("\nStarting server at http://127.0.0.1:5000")
-        print("Press CTRL+C to stop.")
-        app.run(debug=True, port=5000, host='0.0.0.0')
-    else:
-        print("\n[FAILED] Could not load model.")
-        print("Run: python train.py  first.")
+    port = int(os.environ.get('PORT', 5000))
+    print(f"\nStarting server at http://0.0.0.0:{port}")
+    print("Press CTRL+C to stop.")
+    app.run(debug=False, port=port, host='0.0.0.0')

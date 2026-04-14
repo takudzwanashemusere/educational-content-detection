@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: reelscholar-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: MODEL_PATH
+        value: ./best_model.h5
+      - key: MODEL_URL
+        sync: false   # Set this in Render dashboard — paste your Google Drive link here
+    healthCheckPath: /
