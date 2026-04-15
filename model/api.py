@@ -33,7 +33,11 @@ def download_model():
     try:
         import gdown
         print(f"Downloading model from Google Drive → {MODEL_PATH} ...")
-        gdown.download(MODEL_URL, MODEL_PATH, quiet=False, fuzzy=True)
+        try:
+            gdown.download(MODEL_URL, MODEL_PATH, quiet=False, fuzzy=True)
+        except TypeError:
+            # Older gdown versions don't support fuzzy= — fall back without it
+            gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
         print("✓ Download complete.")
     except Exception as e:
         print(f"✗ Model download failed: {e}")
@@ -132,8 +136,10 @@ def run_validation(video_file):
 
 @app.route('/')
 def home():
+    model_status = 'ready' if model is not None else 'loading'
     return jsonify({
         'status': 'running',
+        'model':  model_status,
         'message': 'Reelscholar Video Validation API',
         'endpoints': {
             'validate': '/api/validate-video  [POST]',
@@ -191,11 +197,14 @@ def upload_video():
     }), 403
 
 
-# Load model at startup (works for both gunicorn and direct python run)
+# Load model in a background thread so gunicorn workers are ready
+# immediately (Render health checks won't block waiting for TF to load)
+import threading
+
 print("=" * 60)
 print("  ReelScholar — Educational Video Validation API")
 print("=" * 60)
-load_model()
+threading.Thread(target=load_model, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

@@ -19,4 +19,4 @@ COPY . .
 EXPOSE 10000
 
 # Use gunicorn for production
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "--workers", "1", "api:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "300", "--workers", "1", "api:app"]

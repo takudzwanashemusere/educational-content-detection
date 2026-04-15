@@ -9,3 +9,4 @@ services:
       - key: MODEL_URL
         sync: false   # Set this in Render dashboard — paste your Google Drive link here
     healthCheckPath: /
+    initialDelaySeconds: 60

@@ -1,8 +1,8 @@
 flask
 gunicorn
-tensorflow
+tensorflow-cpu
 numpy
 opencv-python
 librosa
 scikit-learn
-gdown
+gdown>=4.4.0
