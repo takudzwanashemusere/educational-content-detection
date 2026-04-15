@@ -15,6 +15,13 @@ model = None
 
 ALLOWED_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv'}
 
+# Three-zone classification thresholds:
+#   score >= ACCEPT_THRESHOLD  → approved (clearly educational)
+#   score >= REVIEW_THRESHOLD  → under_review (AI uncertain, needs human check)
+#   score <  REVIEW_THRESHOLD  → rejected (clearly not educational)
+ACCEPT_THRESHOLD = 0.75
+REVIEW_THRESHOLD = 0.50
+
 
 def download_model():
     """Download model from Google Drive if MODEL_URL is set and file is missing."""
@@ -91,21 +98,28 @@ def run_validation(video_file):
             verbose=0
         )[0][0]
 
-        # Threshold raised to 0.75 to reduce false positives.
-        # Video must be 75%+ likely to be educational to be accepted.
-        is_educational = bool(prediction > 0.75)
-        confidence     = float(prediction if is_educational else 1.0 - prediction)
+        raw_score = float(prediction)
+
+        if raw_score >= ACCEPT_THRESHOLD:
+            status     = 'approved'
+            confidence = raw_score
+            message    = 'Video accepted — Educational content detected'
+        elif raw_score >= REVIEW_THRESHOLD:
+            status     = 'under_review'
+            confidence = raw_score
+            message    = ('Video flagged for human review — '
+                          'AI confidence too low to auto-approve')
+        else:
+            status     = 'rejected'
+            confidence = 1.0 - raw_score   # confidence in the rejection decision
+            message    = 'Video rejected — Not educational content'
 
         result = {
             'success': True,
-            'is_educational': is_educational,
-            'confidence': round(confidence * 100, 2),
-            'raw_score': round(float(prediction) * 100, 2),
-            'message': ('Video accepted — Educational content detected'
-                        if is_educational
-                        else 'Video rejected — Not educational content')
+            'status':  status,
+            'message': message
         }
-        print(f"Result: {result['message']} (Confidence: {result['confidence']}%)")
+        print(f"Result: {message} (Raw score: {round(raw_score * 100, 2)}%)")
         return result, 200
 
     except Exception as e:
@@ -152,21 +166,29 @@ def upload_video():
     if not result.get('success'):
         return jsonify(result), status_code
 
-    if not result.get('is_educational'):
-        return jsonify({
-            'success': False,
-            'message': 'Upload rejected: Only educational content is allowed.',
-            'confidence': result.get('confidence'),
-            'raw_score':  result.get('raw_score')
-        }), 403
+    status = result.get('status')
 
+    if status == 'approved':
+        return jsonify({
+            'success': True,
+            'status':  'approved',
+            'message': 'Your video has been uploaded successfully.'
+        }), 200
+
+    if status == 'under_review':
+        return jsonify({
+            'success': True,
+            'status':  'under_review',
+            'message': ('Your video has been received and is currently under review. '
+                        'It will go live once our team has verified it.')
+        }), 202
+
+    # status == 'rejected'
     return jsonify({
-        'success': True,
-        'message': 'Video uploaded successfully!',
-        'video_id': 'temp_id_123',
-        'confidence': result.get('confidence'),
-        'raw_score':  result.get('raw_score')
-    }), 200
+        'success': False,
+        'status':  'rejected',
+        'message': 'Your video could not be uploaded. Only educational content is allowed on this platform.'
+    }), 403
 
 
 # Load model at startup (works for both gunicorn and direct python run)
