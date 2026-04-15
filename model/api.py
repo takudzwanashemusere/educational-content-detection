@@ -3,9 +3,14 @@ import tensorflow as tf
 import numpy as np
 import tempfile
 import os
+import uuid
+import threading
 from preprocessing import extract_frames, extract_audio_features
 
 app = Flask(__name__)
+
+# In-memory job store: { job_id: { status, result } }
+jobs = {}
 
 # MODEL_PATH: local file path to use (default: best_model.h5 next to api.py)
 # MODEL_URL:  Google Drive shareable link — if set, model is downloaded on startup
@@ -55,84 +60,6 @@ def load_model():
         return False
 
 
-def run_validation(video_file):
-    """
-    Shared validation helper called by both routes.
-    Extracts video frames AND audio, runs both through the model.
-    File stream is only read once — avoids Flask stream consumption bug.
-    """
-    temp_path = None
-    try:
-        # Validate file extension before any processing
-        ext = os.path.splitext(video_file.filename)[1].lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            return {'success': False,
-                    'error': f'Unsupported file type "{ext}". '
-                             f'Allowed: {", ".join(sorted(ALLOWED_EXTENSIONS))}'}, 400
-
-        # Guard against model not being loaded
-        if model is None:
-            return {'success': False,
-                    'error': 'Model not loaded. Run train.py first.'}, 503
-
-        # Preserve the original extension so ffmpeg identifies the container correctly
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            video_file.save(tmp.name)
-            temp_path = tmp.name
-
-        print(f"Processing: {video_file.filename}")
-
-        frames = extract_frames(temp_path)
-        if frames is None:
-            return {'success': False,
-                    'error': 'Could not read video frames. Check video format.'}, 400
-
-        audio = extract_audio_features(temp_path)
-        if audio is None:
-            return {'success': False,
-                    'error': ('Could not extract audio. '
-                              'Make sure ffmpeg is installed and the video has audio.')}, 400
-
-        # Add batch dimension to both inputs
-        frames_batch = np.expand_dims(frames, axis=0)  # (1, 20, 112, 112, 3)
-        audio_batch  = np.expand_dims(audio,  axis=0)  # (1, 64, 431, 1)
-
-        prediction = model.predict(
-            {'video_input': frames_batch, 'audio_input': audio_batch},
-            verbose=0
-        )[0][0]
-
-        raw_score = float(prediction)
-
-        if raw_score >= ACCEPT_THRESHOLD:
-            status     = 'approved'
-            confidence = raw_score
-            message    = 'Video accepted — Educational content detected'
-        elif raw_score >= REVIEW_THRESHOLD:
-            status     = 'under_review'
-            confidence = raw_score
-            message    = ('Video flagged for human review — '
-                          'AI confidence too low to auto-approve')
-        else:
-            status     = 'rejected'
-            confidence = 1.0 - raw_score   # confidence in the rejection decision
-            message    = 'Video rejected — Not educational content'
-
-        result = {
-            'success': True,
-            'status':  status,
-            'message': message
-        }
-        print(f"Result: {message} (Raw score: {round(raw_score * 100, 2)}%)")
-        return result, 200
-
-    except Exception as e:
-        print(f"Validation error: {str(e)}")
-        return {'success': False, 'error': f'Validation error: {str(e)}'}, 500
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.unlink(temp_path)
-
 
 @app.route('/')
 def home():
@@ -148,53 +75,128 @@ def home():
     })
 
 
-@app.route('/api/validate-video', methods=['POST'])
-def validate_video():
+def process_job(job_id, temp_path, filename, mode):
+    """Runs in a background thread — processes video and stores result in jobs dict."""
+    try:
+        ext = os.path.splitext(filename)[1].lower()
+
+        if model is None:
+            jobs[job_id] = {'status': 'failed', 'error': 'Model not loaded.'}
+            return
+
+        frames = extract_frames(temp_path)
+        if frames is None:
+            jobs[job_id] = {'status': 'failed', 'error': 'Could not read video frames.'}
+            return
+
+        audio = extract_audio_features(temp_path)
+        if audio is None:
+            jobs[job_id] = {'status': 'failed', 'error': 'Could not extract audio.'}
+            return
+
+        frames_batch = np.expand_dims(frames, axis=0)
+        audio_batch  = np.expand_dims(audio,  axis=0)
+
+        prediction = model.predict(
+            {'video_input': frames_batch, 'audio_input': audio_batch},
+            verbose=0
+        )[0][0]
+
+        raw_score = float(prediction)
+
+        if raw_score >= ACCEPT_THRESHOLD:
+            verdict = 'approved'
+        elif raw_score >= REVIEW_THRESHOLD:
+            verdict = 'under_review'
+        else:
+            verdict = 'rejected'
+
+        if mode == 'upload':
+            if verdict == 'approved':
+                result = {'success': True,  'status': 'approved',
+                          'message': 'Your video has been uploaded successfully.'}
+            elif verdict == 'under_review':
+                result = {'success': True,  'status': 'under_review',
+                          'message': ('Your video has been received and is currently '
+                                      'under review. It will go live once our team '
+                                      'has verified it.')}
+            else:
+                result = {'success': False, 'status': 'rejected',
+                          'message': ('Your video could not be uploaded. '
+                                      'Only educational content is allowed.')}
+        else:
+            if verdict == 'approved':
+                confidence = raw_score
+                message    = 'Video accepted — Educational content detected'
+            elif verdict == 'under_review':
+                confidence = raw_score
+                message    = 'Video flagged for human review — AI confidence too low'
+            else:
+                confidence = 1.0 - raw_score
+                message    = 'Video rejected — Not educational content'
+            result = {'success': True, 'status': verdict, 'message': message}
+
+        jobs[job_id] = {'status': 'done', 'result': result}
+
+    except Exception as e:
+        jobs[job_id] = {'status': 'failed', 'error': str(e)}
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def submit_job(mode):
+    """Shared entry point for both routes — saves file, starts background thread."""
     if 'video' not in request.files:
         return jsonify({'success': False, 'error': 'No video file provided.'}), 400
     video_file = request.files['video']
     if video_file.filename == '':
         return jsonify({'success': False, 'error': 'No video selected.'}), 400
-    result, status_code = run_validation(video_file)
-    return jsonify(result), status_code
+
+    ext = os.path.splitext(video_file.filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({'success': False,
+                        'error': f'Unsupported file type "{ext}".'}), 400
+
+    # Save file before background thread starts (request context ends after return)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        video_file.save(tmp.name)
+        temp_path = tmp.name
+
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {'status': 'processing'}
+    threading.Thread(target=process_job,
+                     args=(job_id, temp_path, video_file.filename, mode),
+                     daemon=True).start()
+
+    return jsonify({'success': True, 'job_id': job_id,
+                    'poll': f'/api/result/{job_id}'}), 202
+
+
+@app.route('/api/result/<job_id>', methods=['GET'])
+def get_result(job_id):
+    job = jobs.get(job_id)
+    if job is None:
+        return jsonify({'success': False, 'error': 'Job not found.'}), 404
+    if job['status'] == 'processing':
+        return jsonify({'success': True, 'status': 'processing',
+                        'message': 'Still processing, check back shortly.'}), 202
+    if job['status'] == 'failed':
+        return jsonify({'success': False, 'error': job.get('error')}), 500
+    # done — return result and clean up
+    result = job['result']
+    del jobs[job_id]
+    return jsonify(result), 200
+
+
+@app.route('/api/validate-video', methods=['POST'])
+def validate_video():
+    return submit_job('validate')
 
 
 @app.route('/api/upload', methods=['POST'])
 def upload_video():
-    if 'video' not in request.files:
-        return jsonify({'success': False, 'error': 'No video file provided.'}), 400
-    video_file = request.files['video']
-    if video_file.filename == '':
-        return jsonify({'success': False, 'error': 'No video selected.'}), 400
-
-    result, status_code = run_validation(video_file)
-
-    if not result.get('success'):
-        return jsonify(result), status_code
-
-    status = result.get('status')
-
-    if status == 'approved':
-        return jsonify({
-            'success': True,
-            'status':  'approved',
-            'message': 'Your video has been uploaded successfully.'
-        }), 200
-
-    if status == 'under_review':
-        return jsonify({
-            'success': True,
-            'status':  'under_review',
-            'message': ('Your video has been received and is currently under review. '
-                        'It will go live once our team has verified it.')
-        }), 202
-
-    # status == 'rejected'
-    return jsonify({
-        'success': False,
-        'status':  'rejected',
-        'message': 'Your video could not be uploaded. Only educational content is allowed on this platform.'
-    }), 403
+    return submit_job('upload')
 
 
 # Load model in a background thread so gunicorn workers are ready
