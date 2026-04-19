@@ -1,6 +1,14 @@
 deploy on railway new G mail for 30 days 
 this will be towards on the 22  April so we can have time to run it on railway 
 no need to wake up the sever like we do on render 
-4
-5
-6
+Total time: roughly 15-30 seconds for the whole process.
+
+The only things that could cause issues:
+ScenarioWhat happensVideo has no audio trackAPI returns error Could not extract audioUnsupported format (not mp4/avi/mov/mkv)API rejects it immediatelyVideo is corruptedAPI returns error Could not read video framesFile bigger than ~500MBWill be very slow but still work
+
+For a normal 3MB mp4 educational video — no issues at all. Your Flutter app will get back a clean response like:
+json{
+  "success": true,
+  "status": "approved",
+  "message": "Your video has been uploaded successfully."
+}
