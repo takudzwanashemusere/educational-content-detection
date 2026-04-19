@@ -14,4 +14,4 @@ json{
 }
 
 
- the Json files should not be showed the  model should just analyse if the video is not educative the message should be shown to the user and  a red lag should be triggered to the admin panel for us to review the video  if its educative it should jut be uploaded re
+ The Json files should not be showed the  model should just analyse if the video is not educative the message should be shown to the user and  a red lag should be triggered to the admin panel for us to review the video  if its educative it should jut be uploaded re
