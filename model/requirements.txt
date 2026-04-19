@@ -6,3 +6,4 @@ opencv-python
 librosa
 scikit-learn
 gdown>=4.4.0
+flask-cors
