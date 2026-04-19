@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import tensorflow as tf
 import numpy as np
 import tempfile
@@ -8,6 +9,7 @@ import threading
 from preprocessing import extract_frames, extract_audio_features
 
 app = Flask(__name__)
+CORS(app)
 
 # In-memory job store: { job_id: { status, result } }
 jobs = {}
