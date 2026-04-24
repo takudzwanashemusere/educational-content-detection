@@ -80,7 +80,7 @@ def home():
 def process_job(job_id, temp_path, filename, mode):
     """Runs in a background thread — processes video and stores result in jobs dict."""
     try:
-        ext = os.path.splitext(filename)[1].lower()
+       
 
         if model is None:
             jobs[job_id] = {'status': 'failed', 'error': 'Model not loaded.'}
@@ -136,7 +136,7 @@ def process_job(job_id, temp_path, filename, mode):
             else:
                 confidence = 1.0 - raw_score
                 message    = 'Video rejected — Not educational content'
-            result = {'success': True, 'status': verdict, 'message': message}
+            result = {'success': True, 'status': verdict, 'message': message, 'confidence': round(confidence, 4)}
 
         jobs[job_id] = {'status': 'done', 'result': result}
 
@@ -203,7 +203,7 @@ def upload_video():
 
 # Load model in a background thread so gunicorn workers are ready
 # immediately (Render health checks won't block waiting for TF to load)
-import threading
+
 
 print("=" * 60)
 print("  ReelScholar — Educational Video Validation API")
