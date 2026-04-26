@@ -7,5 +7,11 @@ ScenarioWhat happensVideo has no audio trackAPI returns error Could not extract 
 
 For a normal 3MB mp4 educational video — no issues at all. Your Flutter app will get back a clean response like:
 json{
-he Json files should not be showed on th UI of the user, the  model should just analyse if the video is not educative the message should be shown to the user and  a red lag should be triggered to the admin panel for us to review the video  if its educative it should jut be uploaded re
+  "success": true,
+  "status": "approved",
+  "message": "Your video has been uploaded successfully."
+}
+
+
+The Json files should not be showed on th UI of the user, the  model should just analyse if the video is not educative the message should be shown to the user and  a red lag should be triggered to the admin panel for us to review the video  if its educative it should jut be uploaded re
 its now only returning the percentage
