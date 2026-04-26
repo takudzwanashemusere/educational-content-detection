@@ -22,13 +22,6 @@ model = None
 
 ALLOWED_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv'}
 
-# Three-zone classification thresholds:
-#   score >= ACCEPT_THRESHOLD  → approved (clearly educational)
-#   score >= REVIEW_THRESHOLD  → under_review (AI uncertain, needs human check)
-#   score <  REVIEW_THRESHOLD  → rejected (clearly not educational)
-ACCEPT_THRESHOLD = 0.75
-REVIEW_THRESHOLD = 0.50
-
 
 def download_model():
     """Download model from Google Drive if MODEL_URL is set and file is missing."""
@@ -62,7 +55,6 @@ def load_model():
         return False
 
 
-
 @app.route('/')
 def home():
     model_status = 'ready' if model is not None else 'loading'
@@ -77,23 +69,47 @@ def home():
     })
 
 
+def _score_message(score):
+    """Return a human-readable label based on educational score percentage."""
+    if score >= 80:
+        return 'Highly educational content.'
+    elif score >= 60:
+        return 'Moderately educational content.'
+    elif score >= 40:
+        return 'Slightly educational content.'
+    elif score >= 10:
+        return 'Mostly non-educational content.'
+    else:
+        return 'Not educational — may contain inappropriate or irrelevant content.'
+
+
 def process_job(job_id, temp_path, filename, mode):
     """Runs in a background thread — processes video and stores result in jobs dict."""
     try:
-       
-
         if model is None:
-            jobs[job_id] = {'status': 'failed', 'error': 'Model not loaded.'}
+            jobs[job_id] = {
+                'status': 'failed',
+                'http_code': 500,
+                'error': 'Model not loaded. Please try again shortly.'
+            }
             return
 
         frames = extract_frames(temp_path)
         if frames is None:
-            jobs[job_id] = {'status': 'failed', 'error': 'Could not read video frames.'}
+            jobs[job_id] = {
+                'status': 'failed',
+                'http_code': 500,
+                'error': 'Server could not read video frames.'
+            }
             return
 
         audio = extract_audio_features(temp_path)
         if audio is None:
-            jobs[job_id] = {'status': 'failed', 'error': 'Could not extract audio.'}
+            jobs[job_id] = {
+                'status': 'failed',
+                'http_code': 500,
+                'error': 'Server could not extract audio from video.'
+            }
             return
 
         frames_batch = np.expand_dims(frames, axis=0)
@@ -104,44 +120,24 @@ def process_job(job_id, temp_path, filename, mode):
             verbose=0
         )[0][0]
 
-        raw_score = float(prediction)
+        # Convert sigmoid output (0–1) to a clean 0–100 percentage
+        educational_score = round(float(prediction) * 100, 1)
 
-        if raw_score >= ACCEPT_THRESHOLD:
-            verdict = 'approved'
-        elif raw_score >= REVIEW_THRESHOLD:
-            verdict = 'under_review'
-        else:
-            verdict = 'rejected'
+        result = {
+            'success': True,
+            'filename': filename,
+            'educational_score': educational_score,
+            'message': _score_message(educational_score)
+        }
 
-        if mode == 'upload':
-            if verdict == 'approved':
-                result = {'success': True,  'status': 'approved',
-                          'message': 'Your video has been uploaded successfully.'}
-            elif verdict == 'under_review':
-                result = {'success': True,  'status': 'under_review',
-                          'message': ('Your video has been received and is currently '
-                                      'under review. It will go live once our team '
-                                      'has verified it.')}
-            else:
-                result = {'success': False, 'status': 'rejected',
-                          'message': ('Your video could not be uploaded. '
-                                      'Only educational content is allowed.')}
-        else:
-            if verdict == 'approved':
-                confidence = raw_score
-                message    = 'Video accepted — Educational content detected'
-            elif verdict == 'under_review':
-                confidence = raw_score
-                message    = 'Video flagged for human review — AI confidence too low'
-            else:
-                confidence = 1.0 - raw_score
-                message    = 'Video rejected — Not educational content'
-            result = {'success': True, 'status': verdict, 'message': message, 'confidence': round(confidence, 4)}
-
-        jobs[job_id] = {'status': 'done', 'result': result}
+        jobs[job_id] = {'status': 'done', 'http_code': 200, 'result': result}
 
     except Exception as e:
-        jobs[job_id] = {'status': 'failed', 'error': str(e)}
+        jobs[job_id] = {
+            'status': 'failed',
+            'http_code': 500,
+            'error': f'Unexpected server error: {str(e)}'
+        }
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
@@ -158,9 +154,8 @@ def submit_job(mode):
     ext = os.path.splitext(video_file.filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         return jsonify({'success': False,
-                        'error': f'Unsupported file type "{ext}".'}), 400
+                        'error': f'Unsupported file type "{ext}". Allowed: mp4, avi, mov, mkv'}), 400
 
-    # Save file before background thread starts (request context ends after return)
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
         video_file.save(tmp.name)
         temp_path = tmp.name
@@ -184,7 +179,7 @@ def get_result(job_id):
         return jsonify({'success': True, 'status': 'processing',
                         'message': 'Still processing, check back shortly.'}), 202
     if job['status'] == 'failed':
-        return jsonify({'success': False, 'error': job.get('error')}), 500
+        return jsonify({'success': False, 'error': job.get('error')}), job.get('http_code', 500)
     # done — return result and clean up
     result = job['result']
     del jobs[job_id]
@@ -201,13 +196,12 @@ def upload_video():
     return submit_job('upload')
 
 
-# Load model in a background thread so gunicorn workers are ready
-# immediately (Render health checks won't block waiting for TF to load)
-
-
 print("=" * 60)
 print("  ReelScholar — Educational Video Validation API")
 print("=" * 60)
+
+# Load model in a background thread so gunicorn workers are ready
+# immediately (Railway health checks won't block waiting for TF to load)
 threading.Thread(target=load_model, daemon=True).start()
 
 if __name__ == '__main__':
