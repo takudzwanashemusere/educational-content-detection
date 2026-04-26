@@ -36,7 +36,6 @@ def download_model():
         try:
             gdown.download(MODEL_URL, MODEL_PATH, quiet=False, fuzzy=True)
         except TypeError:
-            # Older gdown versions don't support fuzzy= — fall back without it
             gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
         print("✓ Download complete.")
     except Exception as e:
@@ -55,20 +54,6 @@ def load_model():
         return False
 
 
-@app.route('/')
-def home():
-    model_status = 'ready' if model is not None else 'loading'
-    return jsonify({
-        'status': 'running',
-        'model':  model_status,
-        'message': 'Reelscholar Video Validation API',
-        'endpoints': {
-            'validate': '/api/validate-video  [POST]',
-            'upload':   '/api/upload          [POST]'
-        }
-    })
-
-
 def _score_message(score):
     """Return a human-readable label based on educational score percentage."""
     if score >= 80:
@@ -82,6 +67,27 @@ def _score_message(score):
     else:
         return 'Not educational — may contain inappropriate or irrelevant content.'
 
+
+# ── Routes ───────────────────────────────────────────────────────────────────
+
+@app.route('/')
+def home():
+    model_status = 'ready' if model is not None else 'loading'
+    return jsonify({
+        'status': 'running',
+        'model':  model_status,
+        'message': 'Reelscholar Video Validation API',
+        'endpoints': {
+            'validate_async': '/api/validate-video       [POST] — returns job_id, poll for result',
+            'validate_sync':  '/api/validate-video-sync  [POST] — waits and returns score directly',
+            'upload_async':   '/api/upload               [POST] — returns job_id, poll for result',
+            'upload_sync':    '/api/upload-sync          [POST] — waits and returns score directly',
+            'result':         '/api/result/<job_id>      [GET]  — poll async job result'
+        }
+    })
+
+
+# ── Async helpers ─────────────────────────────────────────────────────────────
 
 def process_job(job_id, temp_path, filename, mode):
     """Runs in a background thread — processes video and stores result in jobs dict."""
@@ -120,17 +126,18 @@ def process_job(job_id, temp_path, filename, mode):
             verbose=0
         )[0][0]
 
-        # Convert sigmoid output (0–1) to a clean 0–100 percentage
         educational_score = round(float(prediction) * 100, 1)
 
-        result = {
-            'success': True,
-            'filename': filename,
-            'educational_score': educational_score,
-            'message': _score_message(educational_score)
+        jobs[job_id] = {
+            'status': 'done',
+            'http_code': 200,
+            'result': {
+                'success': True,
+                'filename': filename,
+                'educational_score': educational_score,
+                'message': _score_message(educational_score)
+            }
         }
-
-        jobs[job_id] = {'status': 'done', 'http_code': 200, 'result': result}
 
     except Exception as e:
         jobs[job_id] = {
@@ -144,7 +151,7 @@ def process_job(job_id, temp_path, filename, mode):
 
 
 def submit_job(mode):
-    """Shared entry point for both routes — saves file, starts background thread."""
+    """Shared entry point for async routes — saves file, starts background thread."""
     if 'video' not in request.files:
         return jsonify({'success': False, 'error': 'No video file provided.'}), 400
     video_file = request.files['video']
@@ -170,21 +177,66 @@ def submit_job(mode):
                     'poll': f'/api/result/{job_id}'}), 202
 
 
-@app.route('/api/result/<job_id>', methods=['GET'])
-def get_result(job_id):
-    job = jobs.get(job_id)
-    if job is None:
-        return jsonify({'success': False, 'error': 'Job not found.'}), 404
-    if job['status'] == 'processing':
-        return jsonify({'success': True, 'status': 'processing',
-                        'message': 'Still processing, check back shortly.'}), 202
-    if job['status'] == 'failed':
-        return jsonify({'success': False, 'error': job.get('error')}), job.get('http_code', 500)
-    # done — return result and clean up
-    result = job['result']
-    del jobs[job_id]
-    return jsonify(result), 200
+# ── Sync helper ───────────────────────────────────────────────────────────────
 
+def process_sync():
+    """Shared entry point for sync routes — processes video and returns result immediately."""
+    if 'video' not in request.files:
+        return jsonify({'success': False, 'error': 'No video file provided.'}), 400
+    video_file = request.files['video']
+    if video_file.filename == '':
+        return jsonify({'success': False, 'error': 'No video selected.'}), 400
+
+    ext = os.path.splitext(video_file.filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({'success': False,
+                        'error': f'Unsupported file type "{ext}". Allowed: mp4, avi, mov, mkv'}), 400
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        video_file.save(tmp.name)
+        temp_path = tmp.name
+
+    try:
+        if model is None:
+            return jsonify({'success': False,
+                            'error': 'Model not loaded. Please try again shortly.'}), 500
+
+        frames = extract_frames(temp_path)
+        if frames is None:
+            return jsonify({'success': False,
+                            'error': 'Server could not read video frames.'}), 500
+
+        audio = extract_audio_features(temp_path)
+        if audio is None:
+            return jsonify({'success': False,
+                            'error': 'Server could not extract audio from video.'}), 500
+
+        frames_batch = np.expand_dims(frames, axis=0)
+        audio_batch  = np.expand_dims(audio,  axis=0)
+
+        prediction = model.predict(
+            {'video_input': frames_batch, 'audio_input': audio_batch},
+            verbose=0
+        )[0][0]
+
+        educational_score = round(float(prediction) * 100, 1)
+
+        return jsonify({
+            'success': True,
+            'filename': video_file.filename,
+            'educational_score': educational_score,
+            'message': _score_message(educational_score)
+        }), 200
+
+    except Exception as e:
+        return jsonify({'success': False,
+                        'error': f'Unexpected server error: {str(e)}'}), 500
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+# ── Async routes ──────────────────────────────────────────────────────────────
 
 @app.route('/api/validate-video', methods=['POST'])
 def validate_video():
@@ -196,12 +248,40 @@ def upload_video():
     return submit_job('upload')
 
 
+@app.route('/api/result/<job_id>', methods=['GET'])
+def get_result(job_id):
+    job = jobs.get(job_id)
+    if job is None:
+        return jsonify({'success': False, 'error': 'Job not found.'}), 404
+    if job['status'] == 'processing':
+        return jsonify({'success': True, 'status': 'processing',
+                        'message': 'Still processing, check back shortly.'}), 202
+    if job['status'] == 'failed':
+        return jsonify({'success': False,
+                        'error': job.get('error')}), job.get('http_code', 500)
+    result = job['result']
+    del jobs[job_id]
+    return jsonify(result), 200
+
+
+# ── Sync routes ───────────────────────────────────────────────────────────────
+
+@app.route('/api/validate-video-sync', methods=['POST'])
+def validate_video_sync():
+    return process_sync()
+
+
+@app.route('/api/upload-sync', methods=['POST'])
+def upload_video_sync():
+    return process_sync()
+
+
+# ── Startup ───────────────────────────────────────────────────────────────────
+
 print("=" * 60)
 print("  ReelScholar — Educational Video Validation API")
 print("=" * 60)
 
-# Load model in a background thread so gunicorn workers are ready
-# immediately (Railway health checks won't block waiting for TF to load)
 threading.Thread(target=load_model, daemon=True).start()
 
 if __name__ == '__main__':
