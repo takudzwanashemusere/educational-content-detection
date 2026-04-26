@@ -2,7 +2,6 @@ deploy on railway new G mail for 30 days
 this will be towards on the 22  April so we can have time to run it on railway 
 no need to wake up the sever like we do on render 
 Total time: roughly 15-30 seconds for the whole process.
-
 The only things that could cause issues:
 ScenarioWhat happensVideo has no audio trackAPI returns error Could not extract audioUnsupported format (not mp4/avi/mov/mkv)API rejects it immediatelyVideo is corruptedAPI returns error Could not read video framesFile bigger than ~500MBWill be very slow but still work
 
@@ -14,3 +13,4 @@ json{
 }
 
 The Json files should not be showed on th UI of the user, the  model should just analyse if the video is not educative the message should be shown to the user and  a red lag should be triggered to the admin panel for us to review the video  if its educative it should jut be uploaded re
+its now only returning the percentage
